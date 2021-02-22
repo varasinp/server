@@ -1,8 +1,19 @@
 using GraphQL.Server.Ui.Altair.Internal;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+
+#if NETSTANDARD2_0
+using IWebHostEnvironment = Microsoft.AspNetCore.Hosting.IHostingEnvironment;
+#endif
 
 namespace GraphQL.Server.Ui.Altair
 {
@@ -14,9 +25,9 @@ namespace GraphQL.Server.Ui.Altair
         private readonly GraphQLAltairOptions _options;
 
         /// <summary>
-        /// The next middleware
+        /// The static file middleware
         /// </summary>
-        private readonly RequestDelegate _nextMiddleware;
+        private readonly StaticFileMiddleware _staticFileMiddleware;
 
         /// <summary>
         /// The page model used to render Altair
@@ -27,11 +38,15 @@ namespace GraphQL.Server.Ui.Altair
         /// Create a new <see cref="AltairMiddleware"/>
         /// </summary>
         /// <param name="nextMiddleware">The next middleware</param>
+        /// <param name="hostingEnv">Provides information about the web hosting environment an application is running in</param>
+        /// <param name="loggerFactory">Represents a type used to configure the logging system and create instances of <see cref="ILogger"/> from the registered <see cref="ILoggerProvider"/></param>
         /// <param name="options">Options to customize middleware</param>
-        public AltairMiddleware(RequestDelegate nextMiddleware, GraphQLAltairOptions options)
+        public AltairMiddleware(RequestDelegate nextMiddleware, IWebHostEnvironment hostingEnv, ILoggerFactory loggerFactory, GraphQLAltairOptions options)
         {
-            _nextMiddleware = nextMiddleware ?? throw new ArgumentNullException(nameof(nextMiddleware));
+            if (nextMiddleware == null) throw new ArgumentNullException(nameof(nextMiddleware));
+
             _options = options ?? throw new ArgumentNullException(nameof(options));
+            _staticFileMiddleware = CreateStaticFileMiddleware(nextMiddleware, hostingEnv, loggerFactory);
         }
 
         /// <summary>
@@ -44,7 +59,7 @@ namespace GraphQL.Server.Ui.Altair
 
             return IsAltairRequest(httpContext.Request)
                 ? InvokeAltair(httpContext.Response)
-                : _nextMiddleware(httpContext);
+                : _staticFileMiddleware.Invoke(httpContext);
         }
 
         private bool IsAltairRequest(HttpRequest httpRequest)
@@ -61,6 +76,18 @@ namespace GraphQL.Server.Ui.Altair
 
             byte[] data = Encoding.UTF8.GetBytes(_pageModel.Render());
             return httpResponse.Body.WriteAsync(data, 0, data.Length);
+        }
+
+        private StaticFileMiddleware CreateStaticFileMiddleware(RequestDelegate nextMiddleware, IWebHostEnvironment hostingEnv, ILoggerFactory loggerFactory)
+        {
+            const string embeddedFileNamespace = "GraphQL.Server.Ui.Altair.cdn.altair_ui_dist";
+
+            var staticFileOptions = new StaticFileOptions
+            {
+                FileProvider = new EmbeddedFileProvider(typeof(AltairMiddleware).GetTypeInfo().Assembly, embeddedFileNamespace)
+            };
+
+            return new StaticFileMiddleware(nextMiddleware, hostingEnv, Options.Create(staticFileOptions), loggerFactory);
         }
     }
 }

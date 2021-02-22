@@ -1,8 +1,19 @@
 using GraphQL.Server.Ui.Voyager.Internal;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+
+#if NETSTANDARD2_0
+using IWebHostEnvironment = Microsoft.AspNetCore.Hosting.IHostingEnvironment;
+#endif
 
 namespace GraphQL.Server.Ui.Voyager
 {
@@ -14,9 +25,9 @@ namespace GraphQL.Server.Ui.Voyager
         private readonly GraphQLVoyagerOptions _options;
 
         /// <summary>
-        /// The next middleware
+        /// The static file middleware
         /// </summary>
-        private readonly RequestDelegate _nextMiddleware;
+        private readonly StaticFileMiddleware _staticFileMiddleware;
 
         /// <summary>
         /// The page model used to render Voyager
@@ -27,11 +38,15 @@ namespace GraphQL.Server.Ui.Voyager
         /// Create a new <see cref="VoyagerMiddleware"/>
         /// </summary>
         /// <param name="nextMiddleware">The next middleware</param>
+        /// <param name="hostingEnv">Provides information about the web hosting environment an application is running in</param>
+        /// <param name="loggerFactory">Represents a type used to configure the logging system and create instances of <see cref="ILogger"/> from the registered <see cref="ILoggerProvider"/></param>
         /// <param name="options">Options to customize middleware</param>
-        public VoyagerMiddleware(RequestDelegate nextMiddleware, GraphQLVoyagerOptions options)
+        public VoyagerMiddleware(RequestDelegate nextMiddleware, IWebHostEnvironment hostingEnv, ILoggerFactory loggerFactory, GraphQLVoyagerOptions options)
         {
-            _nextMiddleware = nextMiddleware ?? throw new ArgumentNullException(nameof(nextMiddleware));
+            if (nextMiddleware == null) throw new ArgumentNullException(nameof(nextMiddleware));
+
             _options = options ?? throw new ArgumentNullException(nameof(options));
+            _staticFileMiddleware = CreateStaticFileMiddleware(nextMiddleware, hostingEnv, loggerFactory);
         }
 
         /// <summary>
@@ -45,7 +60,7 @@ namespace GraphQL.Server.Ui.Voyager
 
             return IsVoyagerRequest(httpContext.Request)
                 ? InvokeVoyager(httpContext.Response)
-                : _nextMiddleware(httpContext);
+                : _staticFileMiddleware.Invoke(httpContext);
         }
 
         private bool IsVoyagerRequest(HttpRequest httpRequest)
@@ -62,6 +77,18 @@ namespace GraphQL.Server.Ui.Voyager
 
             byte[] data = Encoding.UTF8.GetBytes(_pageModel.Render());
             return httpResponse.Body.WriteAsync(data, 0, data.Length);
+        }
+
+        private StaticFileMiddleware CreateStaticFileMiddleware(RequestDelegate nextMiddleware, IWebHostEnvironment hostingEnv, ILoggerFactory loggerFactory)
+        {
+            const string embeddedFileNamespace = "GraphQL.Server.Ui.Voyager.cdn.voyager_ui_dist";
+
+            var staticFileOptions = new StaticFileOptions
+            {
+                FileProvider = new EmbeddedFileProvider(typeof(VoyagerMiddleware).GetTypeInfo().Assembly, embeddedFileNamespace)
+            };
+
+            return new StaticFileMiddleware(nextMiddleware, hostingEnv, Options.Create(staticFileOptions), loggerFactory);
         }
     }
 }
